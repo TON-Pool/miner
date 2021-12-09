@@ -1,3 +1,6 @@
+# This file belongs to TON-Pool.com Miner (https://github.com/TON-Pool/miner)
+# License: GPLv3
+
 import argparse
 import base64
 import hashlib
@@ -16,9 +19,10 @@ from urllib.parse import urljoin
 
 pool_url = 'https://next.ton-pool.com'
 wallet = 'EQBoG6BHwfFPTEUsxXW8y0TyHN9_5Z1_VIb2uctCd-NDmCbx'
-VERSION = '0.1.1'
+VERSION = '0.2'
 
 hashes_count = 0
+hashes_count_per_device = []
 hashes_lock = RLock()
 cur_task = None
 task_lock = RLock()
@@ -29,10 +33,11 @@ shares_accepted = 0
 logging.basicConfig(format='%(asctime)s %(message)s', level='INFO')
 
 
-def count_hashes(num):
+def count_hashes(num, device_id):
     global hashes_count
     with hashes_lock:
         hashes_count += num
+        hashes_count_per_device[device_id] += num
 
 
 def report_share():
@@ -78,16 +83,15 @@ def load_task():
     suffix_arr = []
     for j in range(0, 60, 4):
         suffix_arr.append(int.from_bytes(suffix[j:j + 4], 'big'))
-    suffix_np = np.array(suffix_arr).astype(np.uint32)
     with task_lock:
-        cur_task = [0, input, r['giver'], complexity, hash_state, suffix_arr, suffix_np]
+        cur_task = [0, input, r['giver'], complexity, hash_state, suffix_arr]
     return True, None
 
 
 def update_task():
     lst_ok = time.time()
     while True:
-        time.sleep(10)
+        time.sleep(5)
         st, e = load_task()
         if st:
             lst_ok = time.time()
@@ -99,8 +103,9 @@ def update_task():
 
 def get_task(iterations):
     with task_lock:
-        global_it, input, giver, complexity, hash_state, suffix_arr, suffix_np = cur_task
+        global_it, input, giver, complexity, hash_state, suffix_arr = cur_task
         cur_task[0] += 256
+    suffix_np = np.array(suffix_arr[:12] + [suffix_arr[14]]).astype(np.uint32)
     return input, giver, complexity, suffix_arr, global_it, np.concatenate((np.array([iterations, global_it]).astype(np.uint32), hash_state, suffix_np))
 
 
@@ -134,8 +139,9 @@ def get_device_id(device):
 
 
 class Worker:
-    def __init__(self, device, program, threads):
+    def __init__(self, device, program, threads, id):
         self.device = device
+        self.device_id = id
         self.context = cl.Context(devices=[device], dev_type=None)
         self.queue = cl.CommandQueue(self.context)
         self.kernel = cl.Program(self.context, program).build().hash_solver
@@ -182,7 +188,7 @@ class Worker:
                     logging.warning('hash integrity error, please check your graphics card drivers')
                 if h < complexity:
                     share_report_queue.put((input_new[:123].hex(), giver, h))
-        count_hashes(self.threads * self.iterations)
+        count_hashes(self.threads * self.iterations, self.device_id)
         return self.threads * self.iterations / elapsed, elapsed
 
     def run(self):
@@ -248,6 +254,7 @@ if __name__ == '__main__':
     parser.add_argument('-p', dest='PLATFORM', help='Platform ID')
     parser.add_argument('-d', dest='DEVICE', help='Device ID')
     parser.add_argument('-t', dest='THREADS', help='Number of threads. This is applied for all devices.')
+    parser.add_argument('--stats', dest='STATS', action='store_true', help='Dump stats to stats.json')
     parser.add_argument('POOL', help='Pool URL')
     parser.add_argument('WALLET', help='Your wallet address')
     args = parser.parse_args(run_args)
@@ -255,6 +262,7 @@ if __name__ == '__main__':
     pool_url = args.POOL
     wallet = args.WALLET
     logging.info('starting TON-Pool.com Miner %s on pool %s wallet %s ...' % (VERSION, pool_url, wallet))
+    start_time = time.time()
     try:
         r = requests.get(urljoin(pool_url, '/wallet/' + wallet), timeout=10)
     except Exception as e:
@@ -292,21 +300,22 @@ if __name__ == '__main__':
             cur_devices = [cur_devices[t]]
         devices += cur_devices
     logging.info('total devices: %d' % len(devices))
+    hashes_count_per_device = [0] * len(devices)
 
     path = os.path.dirname(os.path.abspath(__file__))
     try:
-        prog = open(os.path.join(path, 'sha256.cl'), 'r').read()
+        prog = open(os.path.join(path, 'sha256.cl'), 'r').read() + '\n' + open(os.path.join(path, 'hash_solver.cl'), 'r').read()
     except:
         logging.info('failed to load opencl program')
         os._exit(1)
-    for device in devices:
-        w = Worker(device, prog, args.THREADS)
+    for i, device in enumerate(devices):
+        w = Worker(device, prog, args.THREADS, i)
         th = Thread(target=w.run)
         th.setDaemon(True)
         th.start()
 
     ss = []
-    ss.append((time.time(), hashes_count))
+    ss.append((time.time(), hashes_count, [0] * len(devices)))
     cnt = 0
     while True:
         try:
@@ -314,7 +323,7 @@ if __name__ == '__main__':
         except KeyboardInterrupt:
             logging.info('exiting...')
             os._exit(0)
-        ss.append((time.time(), hashes_count))
+        ss.append((time.time(), hashes_count, hashes_count_per_device[:]))
         if len(ss) > 7:
             ss.pop(0)
         a, b = ss[-2], ss[-1]
@@ -325,3 +334,19 @@ if __name__ == '__main__':
             a, b = ss[0], ss[-1]
             ct = b[0] - a[0]
             logging.info('average hashrate in last minute: %.2fMH/s in %.2fs' % (((b[1] - a[1]) / ct / 10**6), ct))
+        if (cnt < 8 or cnt % 6 == 2) and args.STATS:
+            if cnt < 8:
+                a, b = ss[-2], ss[-1]
+            else:
+                a, b = ss[0], ss[-1]
+            ct = b[0] - a[0]
+            rates = []
+            for i in range(len(devices)):
+                rates.append((b[2][i] - a[2][i]) / ct / 10**6)
+            json.dump({
+                'total': (b[1] - a[1]) / ct / 10**3,
+                'rates': rates,
+                'uptime': time.time() - start_time,
+                'accepted': shares_accepted,
+                'rejected': shares_count - shares_accepted,
+            }, open('stats.json', 'w'))

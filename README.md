@@ -14,6 +14,14 @@ miner-windows.exe run https://next.ton-pool.club <your_wallet>
 ./miner-linux run https://next.ton-pool.club <your_wallet>
 ```
 
+### Hive OS Configuration
+
+Installation URL: go to [releases](https://github.com/TON-Pool/miner/releases), copy the link of any `hiveos` file.
+
+Wallet and worker template: `%WAL%`
+
+Pool URL: https://next.ton-pool.club
+
 ## Run Python code
 
 If you want to debug the miner, you can run the Python code directly.
