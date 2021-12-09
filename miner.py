@@ -16,7 +16,7 @@ from urllib.parse import urljoin
 
 pool_url = 'https://next.ton-pool.com'
 wallet = 'EQBoG6BHwfFPTEUsxXW8y0TyHN9_5Z1_VIb2uctCd-NDmCbx'
-VERSION = '0.1'
+VERSION = '0.1.1'
 
 hashes_count = 0
 hashes_lock = RLock()
@@ -69,7 +69,8 @@ def load_task():
 
     wallet = base64.urlsafe_b64decode(r['wallet'])
     assert wallet[1] * 4 % 256 == 0
-    input = b'\0\xf2Mine\0' + r['expire'].to_bytes(4, 'big') + wallet[2:34] + b'\0' * 32 + bytes.fromhex(r['seed']) + b'\0' * 32
+    prefix = bytes(map(lambda x, y: x ^ y, b'\0' * 4 + os.urandom(28), bytes.fromhex(r['prefix']).ljust(32, b'\0')))
+    input = b'\0\xf2Mine\0' + r['expire'].to_bytes(4, 'big') + wallet[2:34] + prefix + bytes.fromhex(r['seed']) + prefix
     complexity = bytes.fromhex(r['complexity'])
 
     hash_state = np.array(sha256.generate_hash(input[:64])).astype(np.uint32)
@@ -177,10 +178,12 @@ class Worker:
                 for x in suf:
                     input_new += int(x).to_bytes(4, 'big')
                 h = hashlib.sha256(input_new[:123]).digest()
+                if h[:4] != b'\0\0\0\0':
+                    logging.warning('hash integrity error, please check your graphics card drivers')
                 if h < complexity:
                     share_report_queue.put((input_new[:123].hex(), giver, h))
         count_hashes(self.threads * self.iterations)
-        return self.threads * self.iterations / elapsed
+        return self.threads * self.iterations / elapsed, elapsed
 
     def run(self):
         dd = get_device_id(self.device)
@@ -189,11 +192,18 @@ class Worker:
             logging.info('the hashrate may be not stable in one minute due to benchmarking')
             self.iterations = 2048
             max_hr = (0, 0)
+            flag = False
             while True:
                 self.iterations *= 2
                 hrs = []
                 for _ in range(5):
-                    hrs.append(self.run_task())
+                    hr, tm = self.run_task()
+                    if tm > 10:
+                        flag = True
+                        break
+                    hrs.append(hr)
+                if flag:
+                    break
                 hr = sum(hrs) / len(hrs)
                 if hr > max_hr[0]:
                     max_hr = (hr, self.iterations)
