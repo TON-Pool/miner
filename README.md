@@ -8,7 +8,7 @@ Download the latest release of our miner at https://github.com/TON-Pool/miner/re
 
 ```
 # Windows
-miner-windows.com run https://next.ton-pool.club <your_wallet>
+miner-windows.exe run https://next.ton-pool.club <your_wallet>
 
 # Linux/macOS
 ./miner-linux run https://next.ton-pool.club <your_wallet>
