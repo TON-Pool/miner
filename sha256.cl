@@ -176,50 +176,48 @@ __constant u32 k_sha256[64] =
   SHA256C3c, SHA256C3d, SHA256C3e, SHA256C3f,
 };
 
-#define ROUND_EXPAND_S()                            \
-{                                                   \
-  w0_t = SHA256_EXPAND_S (we_t, w9_t, w1_t, w0_t);  \
-  w1_t = SHA256_EXPAND_S (wf_t, wa_t, w2_t, w1_t);  \
-  w2_t = SHA256_EXPAND_S (w0_t, wb_t, w3_t, w2_t);  \
-  w3_t = SHA256_EXPAND_S (w1_t, wc_t, w4_t, w3_t);  \
-  w4_t = SHA256_EXPAND_S (w2_t, wd_t, w5_t, w4_t);  \
-  w5_t = SHA256_EXPAND_S (w3_t, we_t, w6_t, w5_t);  \
-  w6_t = SHA256_EXPAND_S (w4_t, wf_t, w7_t, w6_t);  \
-  w7_t = SHA256_EXPAND_S (w5_t, w0_t, w8_t, w7_t);  \
-  w8_t = SHA256_EXPAND_S (w6_t, w1_t, w9_t, w8_t);  \
-  w9_t = SHA256_EXPAND_S (w7_t, w2_t, wa_t, w9_t);  \
-  wa_t = SHA256_EXPAND_S (w8_t, w3_t, wb_t, wa_t);  \
-  wb_t = SHA256_EXPAND_S (w9_t, w4_t, wc_t, wb_t);  \
-  wc_t = SHA256_EXPAND_S (wa_t, w5_t, wd_t, wc_t);  \
-  wd_t = SHA256_EXPAND_S (wb_t, w6_t, we_t, wd_t);  \
-  we_t = SHA256_EXPAND_S (wc_t, w7_t, wf_t, we_t);  \
-  wf_t = SHA256_EXPAND_S (wd_t, w8_t, w0_t, wf_t);  \
+#define ROUND_EXPAND_S(A, B)                                            \
+  const uint w0_##B = SHA256_EXPAND_S (we_##A, w9_##A, w1_##A, w0_##A); \
+  const uint w1_##B = SHA256_EXPAND_S (wf_##A, wa_##A, w2_##A, w1_##A); \
+  const uint w2_##B = SHA256_EXPAND_S (w0_##B, wb_##A, w3_##A, w2_##A); \
+  const uint w3_##B = SHA256_EXPAND_S (w1_##B, wc_##A, w4_##A, w3_##A); \
+  const uint w4_##B = SHA256_EXPAND_S (w2_##B, wd_##A, w5_##A, w4_##A); \
+  const uint w5_##B = SHA256_EXPAND_S (w3_##B, we_##A, w6_##A, w5_##A); \
+  const uint w6_##B = SHA256_EXPAND_S (w4_##B, wf_##A, w7_##A, w6_##A); \
+  const uint w7_##B = SHA256_EXPAND_S (w5_##B, w0_##B, w8_##A, w7_##A); \
+  const uint w8_##B = SHA256_EXPAND_S (w6_##B, w1_##B, w9_##A, w8_##A); \
+  const uint w9_##B = SHA256_EXPAND_S (w7_##B, w2_##B, wa_##A, w9_##A); \
+  const uint wa_##B = SHA256_EXPAND_S (w8_##B, w3_##B, wb_##A, wa_##A); \
+  const uint wb_##B = SHA256_EXPAND_S (w9_##B, w4_##B, wc_##A, wb_##A); \
+  const uint wc_##B = SHA256_EXPAND_S (wa_##B, w5_##B, wd_##A, wc_##A); \
+  const uint wd_##B = SHA256_EXPAND_S (wb_##B, w6_##B, we_##A, wd_##A); \
+  const uint we_##B = SHA256_EXPAND_S (wc_##B, w7_##B, wf_##A, we_##A); \
+  const uint wf_##B = SHA256_EXPAND_S (wd_##B, w8_##B, w0_##B, wf_##A);
+
+#define ROUND_STEP_S(i, A)                                                                  \
+{                                                                                           \
+  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, a, b, c, d, e, f, g, h, w0_##A, k_sha256[i +  0]); \
+  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, h, a, b, c, d, e, f, g, w1_##A, k_sha256[i +  1]); \
+  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, g, h, a, b, c, d, e, f, w2_##A, k_sha256[i +  2]); \
+  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, f, g, h, a, b, c, d, e, w3_##A, k_sha256[i +  3]); \
+  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, e, f, g, h, a, b, c, d, w4_##A, k_sha256[i +  4]); \
+  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, d, e, f, g, h, a, b, c, w5_##A, k_sha256[i +  5]); \
+  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, c, d, e, f, g, h, a, b, w6_##A, k_sha256[i +  6]); \
+  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, b, c, d, e, f, g, h, a, w7_##A, k_sha256[i +  7]); \
+  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, a, b, c, d, e, f, g, h, w8_##A, k_sha256[i +  8]); \
+  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, h, a, b, c, d, e, f, g, w9_##A, k_sha256[i +  9]); \
+  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, g, h, a, b, c, d, e, f, wa_##A, k_sha256[i + 10]); \
+  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, f, g, h, a, b, c, d, e, wb_##A, k_sha256[i + 11]); \
+  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, e, f, g, h, a, b, c, d, wc_##A, k_sha256[i + 12]); \
+  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, d, e, f, g, h, a, b, c, wd_##A, k_sha256[i + 13]); \
+  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, c, d, e, f, g, h, a, b, we_##A, k_sha256[i + 14]); \
+  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, b, c, d, e, f, g, h, a, wf_##A, k_sha256[i + 15]); \
 }
 
-#define ROUND_STEP_S(i)                                                                   \
-{                                                                                         \
-  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, a, b, c, d, e, f, g, h, w0_t, k_sha256[i +  0]); \
-  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, h, a, b, c, d, e, f, g, w1_t, k_sha256[i +  1]); \
-  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, g, h, a, b, c, d, e, f, w2_t, k_sha256[i +  2]); \
-  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, f, g, h, a, b, c, d, e, w3_t, k_sha256[i +  3]); \
-  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, e, f, g, h, a, b, c, d, w4_t, k_sha256[i +  4]); \
-  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, d, e, f, g, h, a, b, c, w5_t, k_sha256[i +  5]); \
-  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, c, d, e, f, g, h, a, b, w6_t, k_sha256[i +  6]); \
-  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, b, c, d, e, f, g, h, a, w7_t, k_sha256[i +  7]); \
-  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, a, b, c, d, e, f, g, h, w8_t, k_sha256[i +  8]); \
-  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, h, a, b, c, d, e, f, g, w9_t, k_sha256[i +  9]); \
-  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, g, h, a, b, c, d, e, f, wa_t, k_sha256[i + 10]); \
-  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, f, g, h, a, b, c, d, e, wb_t, k_sha256[i + 11]); \
-  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, e, f, g, h, a, b, c, d, wc_t, k_sha256[i + 12]); \
-  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, d, e, f, g, h, a, b, c, wd_t, k_sha256[i + 13]); \
-  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, c, d, e, f, g, h, a, b, we_t, k_sha256[i + 14]); \
-  SHA256_STEP_S (SHA256_F0o, SHA256_F1o, b, c, d, e, f, g, h, a, wf_t, k_sha256[i + 15]); \
-}
-
-#define sha256_transform() \
-{                                         \
-  ROUND_STEP_S (0);                       \
-  ROUND_EXPAND_S (); ROUND_STEP_S (16);   \
-  ROUND_EXPAND_S (); ROUND_STEP_S (32);   \
-  ROUND_EXPAND_S (); ROUND_STEP_S (48);   \
+#define sha256_transform()                        \
+{                                                 \
+  ROUND_STEP_S (0, t);                            \
+  ROUND_EXPAND_S (t, t2); ROUND_STEP_S (16, t2);  \
+  ROUND_EXPAND_S (t2, t3); ROUND_STEP_S (32, t3); \
+  ROUND_EXPAND_S (t3, t4); ROUND_STEP_S (48, t4); \
 }

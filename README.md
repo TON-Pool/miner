@@ -10,9 +10,11 @@ Download the latest release of our miner at https://github.com/TON-Pool/miner/re
 # Windows
 miner-windows.exe run https://next.ton-pool.club <your_wallet>
 
-# Linux/macOS
+# Linux
 ./miner-linux run https://next.ton-pool.club <your_wallet>
 ```
+
+If you have updated your hardware settings (like overclocking) or if you accidentally run our miner twice, make sure to delete `benchmark_data.txt` before running it again to get optimal hashrate.
 
 ### Hive OS Configuration
 
@@ -37,6 +39,12 @@ The command is
 ```
 python3 miner.py [pool addr] [wallet address]
 ```
+
+An optional dependency is `websocket-client`, if you install it you can get more timely job fetching.
+
+## Dev Fee
+
+You are allowed to use our miner in any mining pool, but if you don't use [TON-Pool.com](https://ton-pool.com/), then 1% of your income will be donated to the developers.
 
 ## License
 
