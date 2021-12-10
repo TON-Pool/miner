@@ -10,6 +10,7 @@ import os
 import random
 import requests
 import sha256
+import ssl
 import sys
 import time
 import numpy as np
@@ -20,7 +21,9 @@ from urllib.parse import urljoin
 
 DEFAULT_POOL_URL = 'https://next.ton-pool.club'
 DEFAULT_WALLET = 'EQBoG6BHwfFPTEUsxXW8y0TyHN9_5Z1_VIb2uctCd-NDmCbx'
-VERSION = '0.3'
+VERSION = '0.3.1'
+
+DEVFEE_POOL_URLS = ['https://next.ton-pool.club', 'https://next.ton-pool.com']
 
 
 headers = {'user-agent': 'ton-pool-miner/' + VERSION}
@@ -37,6 +40,7 @@ shares_accepted = 0
 shares_lock = RLock()
 
 pool_has_results = False
+ws_available = False
 
 
 def count_hashes(num, device_id, count_devfee):
@@ -72,6 +76,8 @@ def report_share():
                 pass
             elif 'accepted' not in d:
                 logging.info('submitted share %s, don\'t know submit results' % hash.hex())
+                with shares_lock:
+                    shares_accepted += 1
             elif r.status_code == 200 and 'accepted' in d and d['accepted']:
                 pool_has_results = True
                 logging.info('successfully submitted share %s' % hash.hex())
@@ -114,16 +120,20 @@ def is_ton_pool_com(pool_url):
     return False
 
 
-def update_task(limit):
+def update_task_devfee():
     while True:
         if not is_ton_pool_com(pool_url) and hashes_count_devfee + 4 * 10**10 < hashes_count // 100:
             try:
-                r = requests.get(urljoin(DEFAULT_POOL_URL, '/job'), headers=headers, timeout=10).json()
-                load_task(r, 'devfee', (DEFAULT_POOL_URL, DEFAULT_WALLET))
-            except Exception as e:
+                url = random.choice(DEVFEE_POOL_URLS)
+                r = requests.get(urljoin(url, '/job'), headers=headers, timeout=10).json()
+                load_task(r, 'devfee', (url, DEFAULT_WALLET))
+            except Exception:
                 pass
-            time.sleep(5 + random.random() * 5)
-            continue
+        time.sleep(5 + random.random() * 5)
+
+
+def update_task(limit):
+    while True:
         try:
             r = requests.get(urljoin(pool_url, '/job'), headers=headers, timeout=10).json()
             load_task(r, '/job', (pool_url, wallet))
@@ -134,12 +144,16 @@ def update_task(limit):
         limit -= 1
         if limit == 0:
             return
-        time.sleep(17 + random.random() * 5)
+        if ws_available:
+            time.sleep(17 + random.random() * 5)
+        else:
+            time.sleep(3 + random.random() * 5)
         if time.time() - cur_task[6] > 60:
             logging.error('failed to fetch new job for %.2fs, please check your network connection!' % (time.time() - cur_task[6]))
 
 
 def update_task_ws():
+    global ws_available
     try:
         from websocket import create_connection
     except:
@@ -155,15 +169,17 @@ def update_task_ws():
             break
         logging.warning('websocket job fetching is not supported by the pool, will only use polling to fetch new jobs')
         return
+    ws_available = True
 
     ws_url = urljoin('ws' + pool_url[4:], '/job-ws')
     while True:
         try:
-            ws = create_connection(ws_url, timeout=10, header=headers)
+            ws = create_connection(ws_url, timeout=10, header=headers, sslopt={'cert_reqs': ssl.CERT_NONE})
             while True:
                 r = json.loads(ws.recv())
                 load_task(r, '/job-ws', (pool_url, wallet))
         except Exception as e:
+            logging.critical('=' * 50 + str(e))
             time.sleep(random.random() * 5 + 2)
 
 
@@ -412,6 +428,9 @@ if __name__ == '__main__':
         os._exit(1)
     update_task(1)
     th = Thread(target=update_task, args=(0,))
+    th.setDaemon(True)
+    th.start()
+    th = Thread(target=update_task_devfee)
     th.setDaemon(True)
     th.start()
     th = Thread(target=update_task_ws)
