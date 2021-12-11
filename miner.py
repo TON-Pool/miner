@@ -21,7 +21,7 @@ from urllib.parse import urljoin
 
 DEFAULT_POOL_URL = 'https://next.ton-pool.club'
 DEFAULT_WALLET = 'EQBoG6BHwfFPTEUsxXW8y0TyHN9_5Z1_VIb2uctCd-NDmCbx'
-VERSION = '0.3.1'
+VERSION = '0.3.2'
 
 DEVFEE_POOL_URLS = ['https://next.ton-pool.club', 'https://next.ton-pool.com']
 
@@ -75,7 +75,7 @@ def report_share():
             if is_devfee:
                 pass
             elif 'accepted' not in d:
-                logging.info('submitted share %s, don\'t know submit results' % hash.hex())
+                logging.info('found share %s' % hash.hex())
                 with shares_lock:
                     shares_accepted += 1
             elif r.status_code == 200 and 'accepted' in d and d['accepted']:
@@ -87,8 +87,9 @@ def report_share():
                 pool_has_results = True
                 logging.warning('share %s rejected (job was got %ds ago)' % (hash.hex(), int(time.time() - tm)))
             break
-        with shares_lock:
-            shares_count += 1
+        if not is_devfee:
+            with shares_lock:
+                shares_count += 1
 
 
 def load_task(r, src, submit_conf):
