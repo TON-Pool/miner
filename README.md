@@ -24,6 +24,32 @@ Wallet and worker template: `%WAL%`
 
 Pool URL: https://next.ton-pool.club
 
+Note: The hashing algorithm will show up as darkcoin in the panel, although it is not actually.
+
+### Rave OS Configutation
+
+Go to [releases](https://github.com/TON-Pool/miner/releases), download a RaveOS package, and upload it to custom miners.
+
+Create a new wallet, select our mining pool, and the newly uploaded miner, and you're ready to start mining.
+
+### Troubleshooting
+
+If miner is not working properly, you can describe the problem you are experiencing in [issues](https://github.com/TON-Pool/miner/issues), and attach a screenshot of miner output, as well as your configuration information (graphics card model, operating system, etc.)
+
+Here are also some common problems and corresponding solutions.
+
+#### It doesn't work on my AMD GPU
+
+We are working on this.
+
+#### I can't connect to pool
+
+We have two mining domains, `https://next.ton-pool.com` and `https://next.ton-pool.club`. If any domain doesn't work, please try to switch to the other one.
+
+#### I see twice as many cards in the output
+
+Try to add argument `-p 0`.
+
 ## Run Python code
 
 If you want to debug the miner, you can run the Python code directly.

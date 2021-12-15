@@ -21,7 +21,7 @@ from urllib.parse import urljoin
 
 DEFAULT_POOL_URL = 'https://next.ton-pool.club'
 DEFAULT_WALLET = 'EQBoG6BHwfFPTEUsxXW8y0TyHN9_5Z1_VIb2uctCd-NDmCbx'
-VERSION = '0.3.2'
+VERSION = '0.3.3'
 
 DEVFEE_POOL_URLS = ['https://next.ton-pool.club', 'https://next.ton-pool.com']
 
@@ -55,13 +55,14 @@ def count_hashes(num, device_id, count_devfee):
 def report_share():
     global shares_count, shares_accepted, pool_has_results
     n_tries = 5
+    sess = requests.Session()
     while True:
         input, giver, hash, tm, (pool_url, wallet) = share_report_queue.get(True)
         is_devfee = wallet == DEFAULT_WALLET
         logging.debug('trying to submit share %s%s [input = %s, giver = %s, job_time = %.2f]' % (hash.hex(), ' (devfee)' if is_devfee else '', input, giver, tm))
         for i in range(n_tries + 1):
             try:
-                r = requests.post(urljoin(pool_url, '/submit'), json={'inputs': [input], 'giver': giver, 'miner_addr': wallet}, headers=headers, timeout=4 * (i + 1))
+                r = sess.post(urljoin(pool_url, '/submit'), json={'inputs': [input], 'giver': giver, 'miner_addr': wallet}, headers=headers, timeout=4 * (i + 1))
                 d = r.json()
             except Exception as e:
                 if i == n_tries:
@@ -122,11 +123,12 @@ def is_ton_pool_com(pool_url):
 
 
 def update_task_devfee():
+    sess = requests.Session()
     while True:
         if not is_ton_pool_com(pool_url) and hashes_count_devfee + 4 * 10**10 < hashes_count // 100:
             try:
                 url = random.choice(DEVFEE_POOL_URLS)
-                r = requests.get(urljoin(url, '/job'), headers=headers, timeout=10).json()
+                r = sess.get(urljoin(url, '/job'), headers=headers, timeout=10).json()
                 load_task(r, 'devfee', (url, DEFAULT_WALLET))
             except Exception:
                 pass
@@ -134,9 +136,10 @@ def update_task_devfee():
 
 
 def update_task(limit):
+    sess = requests.Session()
     while True:
         try:
-            r = requests.get(urljoin(pool_url, '/job'), headers=headers, timeout=10).json()
+            r = sess.get(urljoin(pool_url, '/job'), headers=headers, timeout=10).json()
             load_task(r, '/job', (pool_url, wallet))
         except Exception as e:
             logging.warning('failed to fetch new job: %s' % e)
@@ -180,7 +183,7 @@ def update_task_ws():
                 r = json.loads(ws.recv())
                 load_task(r, '/job-ws', (pool_url, wallet))
         except Exception as e:
-            logging.critical('=' * 50 + str(e))
+            logging.debug('websocket error: ' + str(e))
             time.sleep(random.random() * 5 + 2)
 
 
@@ -210,15 +213,15 @@ def get_device_id(device):
     try:
         bus = device.get_info(0x4008)
         slot = device.get_info(0x4009)
-        return name + ' on PCI bus %d slot %d' % (bus, slot)
+        return name + ' on PCI bus %d slot %d' % (bus, slot), bus
     except cl.LogicError:
         pass
     try:
         topo = device.get_info(0x4037)
-        return name + ' on PCI bus %d device %d function %d' % (topo.bus, topo.device, topo.function)
+        return name + ' on PCI bus %d device %d function %d' % (topo.bus, topo.device, topo.function), topo.bus
     except cl.LogicError:
         pass
-    return name
+    return name, -1
 
 
 class Worker:
@@ -331,7 +334,7 @@ class Worker:
             if it in ut:
                 cur += ut[it]
                 show_benchmark_status(cur / tot)
-        dd = get_device_id(self.device)
+        dd, _ = get_device_id(self.device)
         logging.info('starting benchmark for %s ...' % dd)
         logging.info('the hashrate may be not stable in several minutes due to benchmarking')
         old_benchmark_status = 0
@@ -350,7 +353,7 @@ class Worker:
             self.benchmark_kernel(dd, kernel, report_benchmark_status)
 
     def run(self):
-        dd = get_device_id(self.device)
+        dd, _ = get_device_id(self.device)
         pending_benchmark = []
         for kernel in self.kernels:
             if dd + ':' + kernel.function_name not in benchmark_data:
@@ -382,7 +385,7 @@ if __name__ == '__main__':
         for i, platform in enumerate(platforms):
             print('Platform %d:' % i)
             for j, device in enumerate(platform.get_devices()):
-                print('    Device %d: %s' % (j, get_device_id(device)))
+                print('    Device %d: %s' % (j, get_device_id(device)[0]))
         os._exit(0)
     if sys.argv[1] == 'run':
         run_args = sys.argv[2:]
@@ -396,10 +399,11 @@ if __name__ == '__main__':
         os._exit(0)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('-p', dest='PLATFORM', help='Platform ID')
-    parser.add_argument('-d', dest='DEVICE', help='Device ID')
+    parser.add_argument('-p', dest='PLATFORM', help='Platform ID List, separated by commas (e.g. 0,1).')
+    parser.add_argument('-d', dest='DEVICE', help='Device ID List, separated by commas (e.g 0-0,1,2-1). You can use A-B where A is platform ID and B is device ID.')
     parser.add_argument('-t', dest='THREADS', help='Number of threads. This is applied for all devices.')
     parser.add_argument('--stats', dest='STATS', action='store_true', help='Dump stats to stats.json')
+    parser.add_argument('--stats-devices', dest='STATS_DEVICES', action='store_true', help='Dump devices information to devices.json')
     parser.add_argument('--debug', dest='DEBUG', action='store_true', help='Show all logs')
     parser.add_argument('--silent', dest='SILENT', action='store_true', help='Only show warnings and errors')
     parser.add_argument('POOL', help='Pool URL')
@@ -443,26 +447,42 @@ if __name__ == '__main__':
         th.start()
 
     platforms = cl.get_platforms()
-    if args.PLATFORM is not None:
-        t = int(args.PLATFORM)
-        if t >= len(platforms):
-            logging.info('wrong platform ID: %d' % t)
+    platforms_ids = [] if not args.PLATFORM else list(map(int, args.PLATFORM.split(',')))
+    for x in platforms_ids:
+        if x >= len(platforms):
+            logging.error('wrong platform ID: %d' % x)
             os._exit(1)
-        platforms = [platforms[t]]
+    devices_ids = [] if not args.DEVICE else list(map(lambda x: tuple(map(int, x.split('-')))if'-' in x else (None, int(x)), args.DEVICE.split(',')))
+    devices_ids_c = devices_ids[:]
     devices = []
-    for platform in platforms:
-        cur_devices = platform.get_devices()
-        if args.DEVICE is not None:
-            t = int(args.DEVICE)
-            if t >= len(cur_devices):
-                logging.info('wrong device ID: %d' % t)
-                if args.PLATFORM is not None and len(platforms) > 1:
-                    logging.info('you may want to specify a platform ID')
-                os._exit(1)
-            cur_devices = [cur_devices[t]]
-        devices += cur_devices
+    for i in range(len(platforms)):
+        cur_devices = platforms[i].get_devices()
+        for j, device in enumerate(cur_devices):
+            if (i, j) in devices_ids:
+                devices.append(device)
+                devices_ids_c.remove((i, j))
+                if (None, j) in devices_ids:
+                    devices_ids_c.remove((None, j))
+            elif len(platforms_ids) and i not in platforms_ids:
+                continue
+            elif (None, j) in devices_ids:
+                devices.append(device)
+                if (None, j) in devices_ids:
+                    devices_ids_c.remove((None, j))
+            elif len(devices_ids) == 0:
+                devices.append(device)
+    if len(devices_ids_c):
+        a, b = devices_ids_c[0]
+        logging.error('wrong device ID: ' + ('%d' % b if a is None else '%d-%d' % (a, b)))
+        os._exit(1)
     logging.info('total devices: %d' % len(devices))
     hashes_count_per_device = [0] * len(devices)
+
+    if args.STATS_DEVICES:
+        stats_devices = []
+        for device in devices:
+            stats_devices.append({'name': device.name, 'bus': get_device_id(device)[1]})
+        json.dump(stats_devices, open('devices.json', 'w'))
 
     path = os.path.dirname(os.path.abspath(__file__))
     try:
