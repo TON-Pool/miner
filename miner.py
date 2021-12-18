@@ -21,7 +21,7 @@ from urllib.parse import urljoin
 
 DEFAULT_POOL_URL = 'https://next.ton-pool.club'
 DEFAULT_WALLET = 'EQBoG6BHwfFPTEUsxXW8y0TyHN9_5Z1_VIb2uctCd-NDmCbx'
-VERSION = '0.3.3'
+VERSION = '0.3.4'
 
 DEVFEE_POOL_URLS = ['https://next.ton-pool.club', 'https://next.ton-pool.com']
 
@@ -218,6 +218,10 @@ def get_device_id(device):
         pass
     try:
         topo = device.get_info(0x4037)
+        try:
+            name = device.board_name_amd
+        except:
+            pass
         return name + ' on PCI bus %d device %d function %d' % (topo.bus, topo.device, topo.function), topo.bus
     except cl.LogicError:
         pass
@@ -398,7 +402,10 @@ if __name__ == '__main__':
         print('Run "%s -h" to for detailed arguments' % sys.argv[0])
         os._exit(0)
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description='TON-Pool.com Miner %s\n\nYou can run "%s info" to check your system info' % (VERSION, sys.argv[0])
+    )
     parser.add_argument('-p', dest='PLATFORM', help='Platform ID List, separated by commas (e.g. 0,1).')
     parser.add_argument('-d', dest='DEVICE', help='Device ID List, separated by commas (e.g 0-0,1,2-1). You can use A-B where A is platform ID and B is device ID.')
     parser.add_argument('-t', dest='THREADS', help='Number of threads. This is applied for all devices.')
@@ -475,6 +482,14 @@ if __name__ == '__main__':
         a, b = devices_ids_c[0]
         logging.error('wrong device ID: ' + ('%d' % b if a is None else '%d-%d' % (a, b)))
         os._exit(1)
+    if not args.PLATFORM and not args.DEVICE:
+        new_devices = []
+        for device in devices:
+            if device.type != cl.device_type.CPU:
+                new_devices.append(device)
+            else:
+                logging.info("ignore device %s since it's CPU" % device.name)
+        devices = new_devices
     logging.info('total devices: %d' % len(devices))
     hashes_count_per_device = [0] * len(devices)
 
