@@ -66,7 +66,7 @@ logger = log21.get_logger('TON-Miner', level=log21.INFO)
 
 DEFAULT_POOL_URL = 'https://next.ton-pool.club'
 DEFAULT_WALLET = 'EQBoG6BHwfFPTEUsxXW8y0TyHN9_5Z1_VIb2uctCd-NDmCbx'
-VERSION = '0.3.5'
+VERSION = '0.3.6'
 
 DEVFEE_POOL_URLS = ['https://next.ton-pool.club', 'https://next.ton-pool.com']
 
@@ -611,7 +611,17 @@ def main():
         if cnt >= 6 and cnt % 6 == 2:
             a, b = ss[0], ss[-1]
             ct = b[0] - a[0]
-            logger.info(LGreen + f'Average hashrate in last minute{LRed}: '
+            uptime_seconds = int(time.time() - start_time)
+            uptime_minutes = 0
+            uptime_hours = 0
+            if uptime_seconds > 60:
+                uptime_minutes = uptime_seconds // 60
+                uptime_seconds %= 60
+            if uptime_minutes > 60:
+                uptime_hours = uptime_minutes // 60
+                uptime_minutes %= 60
+            logger.info(LGreen + f'Uptime{LRed}: {LCyan}{uptime_hours:02d}:{uptime_minutes:02d}:{uptime_seconds:02d} '
+                                 f'{LGreen}Average hashrate in last minute{LRed}: '
                                  f'{LBlue}{((b[1] - a[1]) / ct / 10 ** 6):.2f}MH/s{LGreen} in {ct:.2f}s')
         if (cnt < 8 or cnt % 6 == 2) and args.STATS:
             if cnt < 8:
@@ -632,4 +642,5 @@ def main():
 
 
 if __name__ == '__main__':
+    start_time = time.time()
     main()
