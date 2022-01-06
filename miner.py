@@ -1,30 +1,74 @@
 # This file belongs to TON-Pool.com Miner (https://github.com/TON-Pool/miner)
+# Fork: https://github.com/MPCodeWriter21/miner
 # License: GPLv3
 
-import argparse
-import base64
-import hashlib
-import json
-import logging
 import os
-import random
-import requests
-import sha256
 import ssl
 import sys
 import time
+import json
+import log21
+import base64
+import random
+import sha256
+import hashlib
+import argparse
+import requests
 import numpy as np
 import pyopencl as cl
 from queue import Queue
 from threading import Thread, RLock
 from urllib.parse import urljoin
 
+
+class Task:
+    def __init__(self, global_it: int, input_, giver, complexity, hash_state, suffix_arr, load_time: float, submit_conf,
+                 wallet_b64):
+        self.global_it: int = global_it
+        self.input = input_
+        self.giver = giver
+        self.complexity = complexity
+        self.hash_state = hash_state
+        self.suffix_arr = suffix_arr
+        self.load_time = load_time
+        self.submit_conf = submit_conf
+        self.is_devfee: bool = wallet_b64 == DEFAULT_WALLET
+
+    def list(self) -> list:
+        return [self.global_it, self.input, self.giver, self.complexity, self.hash_state, self.suffix_arr,
+                self.load_time, self.submit_conf, self.is_devfee]
+
+    def __repr__(self):
+        return '\n' + LYellow + 'global_it' + LRed + ':' + LWhite + str(self.global_it) + '\n' + \
+               LYellow + 'input' + LRed + ': ' + LWhite + str(self.input) + '\n' + \
+               LYellow + 'giver' + LRed + ': ' + LWhite + str(self.giver) + '\n' + \
+               LYellow + 'complexity' + LRed + ': ' + LWhite + str(self.complexity) + '\n' + \
+               LYellow + 'hash_state' + LRed + ': ' + LWhite + str(self.hash_state) + '\n' + \
+               LYellow + 'suffix_arr' + LRed + ': ' + LWhite + str(self.suffix_arr) + '\n' + \
+               LYellow + 'load_time' + LRed + ': ' + LWhite + str(self.load_time) + '\n' + \
+               LYellow + 'submit_conf' + LRed + ': ' + LWhite + str(self.submit_conf) + '\n' + \
+               LYellow + 'is_devfee' + LRed + ': ' + LWhite + str(self.is_devfee) + '\n'
+
+
+# Colors
+Cyan = log21.get_color('Cyan')
+LCyan = log21.get_color('LightCyan')
+LYellow = log21.get_color('LightYellow')
+Red = log21.get_color('Red')
+LRed = log21.get_color('LightRed')
+Green = log21.get_color('Green')
+LGreen = log21.get_color('LightGreen')
+LBlue = log21.get_color('LightBlue')
+LPink = log21.get_color('LightMagenta')
+LWhite = log21.get_color('LightWhite')
+
+logger = log21.get_logger('TON-Miner', level=log21.INFO)
+
 DEFAULT_POOL_URL = 'https://next.ton-pool.club'
 DEFAULT_WALLET = 'EQBoG6BHwfFPTEUsxXW8y0TyHN9_5Z1_VIb2uctCd-NDmCbx'
-VERSION = '0.3.4'
+VERSION = '0.3.5'
 
 DEVFEE_POOL_URLS = ['https://next.ton-pool.club', 'https://next.ton-pool.com']
-
 
 headers = {'user-agent': 'ton-pool-miner/' + VERSION}
 
@@ -32,7 +76,7 @@ hashes_count = 0
 hashes_count_devfee = 0
 hashes_count_per_device = []
 hashes_lock = RLock()
-cur_task = None
+cur_task: Task = None
 task_lock = RLock()
 share_report_queue = Queue()
 shares_count = 0
@@ -42,107 +86,119 @@ shares_lock = RLock()
 pool_has_results = False
 ws_available = False
 
+pool_url = DEFAULT_POOL_URL
+wallet = 'Your wallet'  # EQDvXodurMMNYMuuJLN9ygTSgbQUdo96kX0Fz4QbnmAtzFhf <-- Why don't you donate? XD
 
-def count_hashes(num, device_id, count_devfee):
+
+def count_hashes(num, device_id, is_devfee):
     global hashes_count, hashes_count_devfee
     with hashes_lock:
         hashes_count += num
         hashes_count_per_device[device_id] += num
-        if count_devfee:
+        if is_devfee:
             hashes_count_devfee += num
 
 
 def report_share():
     global shares_count, shares_accepted, pool_has_results
     n_tries = 5
-    sess = requests.Session()
+    session = requests.Session()
     while True:
-        input, giver, hash, tm, (pool_url, wallet) = share_report_queue.get(True)
-        is_devfee = wallet == DEFAULT_WALLET
-        logging.debug('trying to submit share %s%s [input = %s, giver = %s, job_time = %.2f]' % (hash.hex(), ' (devfee)' if is_devfee else '', input, giver, tm))
+        input_, giver, hash_, tm, (pool_url_, wallet_) = share_report_queue.get(True)
+        is_devfee = wallet_ == DEFAULT_WALLET
+        logger.debug(LYellow + f'Trying to submit share {LCyan}{hash_.hex()}{LRed}{"(devfee) " if is_devfee else ""}\n'
+                               f'{LYellow} [input = {input_}, giver = {giver}, job_time = {tm:.2f}]')
         for i in range(n_tries + 1):
             try:
-                r = sess.post(urljoin(pool_url, '/submit'), json={'inputs': [input], 'giver': giver, 'miner_addr': wallet}, headers=headers, timeout=4 * (i + 1))
-                d = r.json()
-            except Exception as e:
+                response = session.post(urljoin(pool_url_, '/submit'),
+                                        json={'inputs': [input_], 'giver': giver, 'miner_addr': wallet_},
+                                        headers=headers,
+                                        timeout=4 * (i + 1))
+                d = response.json()
+            except Exception as exception:
                 if i == n_tries:
                     if not is_devfee:
-                        logging.warning('failed to submit share %s: %s' % (hash.hex(), e))
+                        logger.warning(LRed + f'Failed to submit share {LCyan}{hash_.hex()}{LRed}: {exception}')
                     break
                 if not is_devfee:
-                    logging.warning('failed to submit share %s, retrying (%d/%d): %s' % (hash.hex(), i + 1, n_tries, e))
+                    logger.warning(LRed + f'Failed to submit share {LCyan}{hash_.hex()}{LRed},'
+                                          f' retrying ({i + 1}/{n_tries}): {exception}')
                 time.sleep(0.5)
                 continue
             if is_devfee:
                 pass
             elif 'accepted' not in d:
-                logging.info('found share %s' % hash.hex())
+                logger.info(LGreen + f'Found share {LCyan}{hash_.hex()}')
                 with shares_lock:
                     shares_accepted += 1
-            elif r.status_code == 200 and 'accepted' in d and d['accepted']:
+            elif response.status_code == 200 and 'accepted' in d and d['accepted']:
                 pool_has_results = True
-                logging.info('successfully submitted share %s' % hash.hex())
+                logger.info(LGreen + f'Successfully submitted share {LCyan}{hash_.hex()}')
                 with shares_lock:
                     shares_accepted += 1
             else:
                 pool_has_results = True
-                logging.warning('share %s rejected (job was got %ds ago)' % (hash.hex(), int(time.time() - tm)))
+                logger.warning(LRed + f'Share {LCyan}{hash_.hex()}{LRed} rejected '
+                                      f'(job was got {int(time.time() - tm)}s ago)')
             break
         if not is_devfee:
             with shares_lock:
                 shares_count += 1
 
 
-def load_task(r, src, submit_conf):
+def load_task(response, src, submit_conf):
     global cur_task
-    wallet_b64 = r['wallet']
-    wallet = base64.urlsafe_b64decode(wallet_b64)
-    assert wallet[1] * 4 % 256 == 0
-    prefix = bytes(map(lambda x, y: x ^ y, b'\0' * 4 + os.urandom(28), bytes.fromhex(r['prefix']).ljust(32, b'\0')))
-    input = b'\0\xf2Mine\0' + r['expire'].to_bytes(4, 'big') + wallet[2:34] + prefix + bytes.fromhex(r['seed']) + prefix
-    complexity = bytes.fromhex(r['complexity'])
+    wallet_b64 = response['wallet']
+    wallet_ = base64.urlsafe_b64decode(wallet_b64)
+    assert wallet_[1] * 4 % 256 == 0
+    prefix = bytes(
+        map(lambda x, y: x ^ y, b'\0' * 4 + os.urandom(28), bytes.fromhex(response['prefix']).ljust(32, b'\0')))
+    input_ = b'\0\xf2Mine\0' + response['expire'].to_bytes(4, 'big') + wallet_[2:34] + prefix + bytes.fromhex(
+        response['seed']) + prefix
+    complexity = bytes.fromhex(response['complexity'])
 
-    hash_state = np.array(sha256.generate_hash(input[:64])).astype(np.uint32)
-    suffix = bytes(input[64:]) + b'\x80'
+    hash_state = np.array(sha256.generate_hash(input_[:64])).astype(np.uint32)
+    suffix = bytes(input_[64:]) + b'\x80'
     suffix_arr = []
     for j in range(0, 60, 4):
         suffix_arr.append(int.from_bytes(suffix[j:j + 4], 'big'))
-    new_task = [0, input, r['giver'], complexity, hash_state, suffix_arr, time.time(), submit_conf, wallet_b64 == DEFAULT_WALLET]
+    new_task = Task(0, input_, response['giver'], complexity, hash_state, suffix_arr, time.time(), submit_conf,
+                    wallet_b64)
     with task_lock:
         cur_task = new_task
-    logging.debug('successfully loaded new task from %s: %s' % (src, new_task))
+    logger.debug(Green + f'Successfully loaded new task from {src}: {LGreen}{new_task}')
 
 
-def is_ton_pool_com(pool_url):
-    pool_url = pool_url.strip('/')
-    if pool_url.endswith('.ton-pool.com'):
+def is_ton_pool_com(pool_url_):
+    pool_url_ = pool_url_.strip('/')
+    if pool_url_.endswith('.ton-pool.com'):
         return True
-    if pool_url.endswith('.ton-pool.club'):
+    if pool_url_.endswith('.ton-pool.club'):
         return True
     return False
 
 
 def update_task_devfee():
-    sess = requests.Session()
+    session = requests.Session()
     while True:
-        if not is_ton_pool_com(pool_url) and hashes_count_devfee + 4 * 10**10 < hashes_count // 100:
+        if not is_ton_pool_com(pool_url) and hashes_count_devfee + 4 * 10 ** 10 < hashes_count // 100:
             try:
                 url = random.choice(DEVFEE_POOL_URLS)
-                r = sess.get(urljoin(url, '/job'), headers=headers, timeout=10).json()
-                load_task(r, 'devfee', (url, DEFAULT_WALLET))
+                response = session.get(urljoin(url, '/job'), headers=headers, timeout=10).json()
+                load_task(response, 'devfee', (url, DEFAULT_WALLET))
             except Exception:
                 pass
         time.sleep(5 + random.random() * 5)
 
 
-def update_task(limit):
-    sess = requests.Session()
+def update_task(limit: int) -> None:
+    session = requests.Session()
     while True:
         try:
-            r = sess.get(urljoin(pool_url, '/job'), headers=headers, timeout=10).json()
-            load_task(r, '/job', (pool_url, wallet))
-        except Exception as e:
-            logging.warning('failed to fetch new job: %s' % e)
+            response = session.get(urljoin(pool_url, '/job'), headers=headers, timeout=10).json()
+            load_task(response, '/job', (pool_url, wallet))
+        except Exception as exception:
+            logger.warning(LRed + f'failed to fetch new job: {exception}')
             time.sleep(5)
             continue
         limit -= 1
@@ -152,8 +208,9 @@ def update_task(limit):
             time.sleep(17 + random.random() * 5)
         else:
             time.sleep(3 + random.random() * 5)
-        if time.time() - cur_task[6] > 60:
-            logging.error('failed to fetch new job for %.2fs, please check your network connection!' % (time.time() - cur_task[6]))
+        if time.time() - cur_task.load_time > 60:
+            logger.error(LRed + f'failed to fetch new job for {time.time() - cur_task.load_time:.2f}s, '
+                                f'please check your network connection!')
 
 
 def update_task_ws():
@@ -161,17 +218,18 @@ def update_task_ws():
     try:
         from websocket import create_connection
     except:
-        logging.warning('websocket-client is not installed, will only use polling to fetch new jobs')
+        logger.warning(LRed + '`websocket-client` is not installed, will only use polling to fetch new jobs')
         return
     while True:
         try:
-            r = requests.get(urljoin(pool_url, '/job-ws'), headers=headers, timeout=10)
+            response = requests.get(urljoin(pool_url, '/job-ws'), headers=headers, timeout=10)
         except:
             time.sleep(5)
             continue
-        if r.status_code == 400:
+        if response.status_code == 400:
             break
-        logging.warning('websocket job fetching is not supported by the pool, will only use polling to fetch new jobs')
+        logger.warning(LRed + 'Websocket job fetching is not supported by the pool,'
+                              ' will only use polling to fetch new jobs')
         return
     ws_available = True
 
@@ -180,19 +238,21 @@ def update_task_ws():
         try:
             ws = create_connection(ws_url, timeout=10, header=headers, sslopt={'cert_reqs': ssl.CERT_NONE})
             while True:
-                r = json.loads(ws.recv())
-                load_task(r, '/job-ws', (pool_url, wallet))
-        except Exception as e:
-            logging.debug('websocket error: ' + str(e))
+                response = json.loads(ws.recv())
+                load_task(response, '/job-ws', (pool_url, wallet))
+        except Exception as exception:
+            logger.debug(LRed + 'Websocket error: ' + str(exception))
             time.sleep(random.random() * 5 + 2)
 
 
 def get_task(iterations):
     with task_lock:
-        global_it, input, giver, complexity, hash_state, suffix_arr, tm, submit_conf, count_devfee = cur_task
-        cur_task[0] += 256
+        global_it, input_, giver, complexity, hash_state, suffix_arr, load_time, submit_conf, is_devfee = \
+            cur_task.list()
+        cur_task.global_it += 256
     suffix_np = np.array(suffix_arr[:12] + [suffix_arr[14]]).astype(np.uint32)
-    return input, giver, complexity, suffix_arr, global_it, tm, submit_conf, count_devfee, np.concatenate((np.array([iterations, global_it]).astype(np.uint32), hash_state, suffix_np))
+    return input_, giver, complexity, suffix_arr, global_it, load_time, submit_conf, is_devfee, np.concatenate(
+        (np.array([iterations, global_it]).astype(np.uint32), hash_state, suffix_np))
 
 
 try:
@@ -213,7 +273,7 @@ def get_device_id(device):
     try:
         bus = device.get_info(0x4008)
         slot = device.get_info(0x4009)
-        return name + ' on PCI bus %d slot %d' % (bus, slot), bus
+        return name + f' on PCI bus {bus} slot {slot}', bus
     except cl.LogicError:
         pass
     try:
@@ -222,7 +282,7 @@ def get_device_id(device):
             name = device.board_name_amd
         except:
             pass
-        return name + ' on PCI bus %d device %d function %d' % (topo.bus, topo.device, topo.function), topo.bus
+        return name + f' on PCI bus {topo.bus} device {topo.device} function {topo.function}', topo.bus
     except cl.LogicError:
         pass
     return name, -1
@@ -244,7 +304,7 @@ class Worker:
 
     def run_task(self, kernel, iterations):
         mf = cl.mem_flags
-        input, giver, complexity, suffix_arr, global_it, tm, submit_conf, count_devfee, args = get_task(iterations)
+        input_, giver, complexity, suffix_arr, global_it, tm, submit_conf, is_devfee, args = get_task(iterations)
         args_g = cl.Buffer(self.context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=args)
         res_g = cl.Buffer(self.context, mf.WRITE_ONLY | mf.COPY_HOST_PTR, hostbuf=np.full(2048, 0xffffffff, np.uint32))
         kernel(self.queue, (self.threads,), None, args_g, res_g)
@@ -268,15 +328,15 @@ class Worker:
                 suf[13] ^= a
                 suf[2] ^= global_it
                 suf[14] ^= global_it
-                input_new = input[:64]
+                input_new = input_[:64]
                 for x in suf:
                     input_new += int(x).to_bytes(4, 'big')
                 h = hashlib.sha256(input_new[:123]).digest()
                 if h[:4] != b'\0\0\0\0':
-                    logging.warning('hash integrity error, please check your graphics card drivers')
+                    logger.warning(LRed + 'Hash integrity error, please check your graphics card drivers')
                 if h < complexity:
                     share_report_queue.put((input_new[:123].hex(), giver, h, tm, submit_conf))
-        count_hashes(self.threads * iterations, self.device_id, count_devfee)
+        count_hashes(self.threads * iterations, self.device_id, is_devfee)
 
     def warmup(self, kernel, time_limit):
         iterations = 4096
@@ -314,7 +374,8 @@ class Worker:
             hs = cnt * self.threads * iterations
             tm = time.time() - st
             hr = hs / tm
-            logging.debug('benchmark data: %s %d iterations %.2fMH/s (%d hashes in %ss)' % (kernel.function_name, iterations, hr / 1e6, hs, tm))
+            logger.debug(LYellow + f'Benchmark data: {kernel.function_name} {iterations} iterations '
+                                   f'{LGreen}{(hr / 1e6):.2f}MH/s {LRed}({Cyan}{hs} hashes in {tm}s{LRed})')
             if hr > max_hr[0]:
                 max_hr = (hr, iterations)
         report_benchmark(dd + ':' + kernel.function_name, list(max_hr))
@@ -331,26 +392,27 @@ class Worker:
             x = x * 100
             if x > old_benchmark_status + 2 and x <= 98:
                 old_benchmark_status = x
-                logging.info('benchmarking %s ... %d%%' % (dd, int(x)))
+                logger.info(Green + f'Benchmarking {dd} ... {int(x)}%')
 
         def report_benchmark_status(it):
             nonlocal cur
             if it in ut:
                 cur += ut[it]
                 show_benchmark_status(cur / tot)
+
         dd, _ = get_device_id(self.device)
-        logging.info('starting benchmark for %s ...' % dd)
-        logging.info('the hashrate may be not stable in several minutes due to benchmarking')
+        logger.info(Green + f'Starting benchmark for {dd} ...')
+        logger.info(LYellow + 'The hashrate may be not stable in several minutes due to benchmarking')
         old_benchmark_status = 0
         it, el = self.warmup(self.find_kernel('hash_solver_3'), 15)
         el /= it
         ut = {}
         show_benchmark_status(15 / (len(kernels) * 40 + 20))
         for i in range(12, 100):
-            t = 2**i * el
+            t = 2 ** i * el
             if t > 4:
                 break
-            ut[2**i] = max(t * 4, 2.2)
+            ut[2 ** i] = max(t * 4, 2.2)
         tot = (15 + sum(ut.values()) * 4) / 0.95
         cur = 15
         for kernel in kernels:
@@ -371,48 +433,53 @@ class Worker:
                 max_hr = hr
                 self.best_kernel = kernel
                 self.iterations = it
-        logging.info('%s: starting normal mining with %s and %d iterations per thread' % (dd, self.best_kernel.function_name, self.iterations))
+        logger.info(Green + f'{dd}: starting normal mining with {self.best_kernel.function_name} and {self.iterations} '
+                            f'iterations per thread')
         while True:
             self.run_task(self.best_kernel, self.iterations)
 
 
-if __name__ == '__main__':
+def main():
+    global pool_url, wallet, hashes_count_per_device
     if len(sys.argv) == 1:
         sys.argv.append('')
     if sys.argv[1] == 'info':
-        print('TON-Pool.com Miner', VERSION)
+        log21.print('TON-Pool.com Miner', VERSION)
         try:
             platforms = cl.get_platforms()
         except cl.LogicError:
-            print('failed to get OpenCL platforms, check your graphics card drivers')
-            os._exit(0)
+            log21.print(LRed + 'Failed to get OpenCL platforms, check your graphics card drivers!')
+            sys.exit(0)
         for i, platform in enumerate(platforms):
-            print('Platform %d:' % i)
+            log21.print(LBlue + f'Platform {LWhite}{i}{LRed}:')
             for j, device in enumerate(platform.get_devices()):
-                print('    Device %d: %s' % (j, get_device_id(device)[0]))
-        os._exit(0)
+                log21.print(LBlue + f'    {LWhite}Device {j}{LRed}: {LGreen}{get_device_id(device)[0]}')
+        sys.exit(0)
     if sys.argv[1] == 'run':
         run_args = sys.argv[2:]
     elif sys.argv[1].startswith('http') or sys.argv[1].startswith('-'):
         run_args = sys.argv[1:]
     else:
-        print('TON-Pool.com Miner', VERSION)
-        print('Usage: %s [pool url] [wallet address]' % sys.argv[0])
-        print('Run "%s info" to check your system info' % sys.argv[0])
-        print('Run "%s -h" to for detailed arguments' % sys.argv[0])
-        os._exit(0)
+        log21.print(LCyan + 'TON-Pool.com Miner', VERSION)
+        log21.print(LWhite + f'Usage{LRed}: {LBlue}{sys.argv[0]} [pool url] [wallet address]')
+        log21.print(LWhite + f'Run "{sys.argv[0]} info" to check your system info')
+        log21.print(LWhite + f'Run "{sys.argv[0]} -h" to for detailed arguments')
+        sys.exit(0)
 
-    parser = argparse.ArgumentParser(
+    parser = log21.ColorizingArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description='TON-Pool.com Miner %s\n\nYou can run "%s info" to check your system info' % (VERSION, sys.argv[0])
+        description=f'TON-Pool.com Miner {VERSION}\n\nYou can run "{sys.argv[0]} info" to check your system info'
     )
-    parser.add_argument('-p', dest='PLATFORM', help='Platform ID List, separated by commas (e.g. 0,1).')
-    parser.add_argument('-d', dest='DEVICE', help='Device ID List, separated by commas (e.g 0-0,1,2-1). You can use A-B where A is platform ID and B is device ID.')
-    parser.add_argument('-t', dest='THREADS', help='Number of threads. This is applied for all devices.')
+    parser.add_argument('--platform', '-p', dest='PLATFORM', help='Platform ID List, separated by commas (e.g. 0,1).')
+    parser.add_argument('--device', '-d', dest='DEVICE', help='Device ID List, separated by commas (e.g 0-0,1,2-1). '
+                                                              'You can use A-B where A is platform ID and B is device'
+                                                              ' ID.')
+    parser.add_argument('--threads', '-t', dest='THREADS', help='Number of threads. This is applied for all devices.')
     parser.add_argument('--stats', dest='STATS', action='store_true', help='Dump stats to stats.json')
-    parser.add_argument('--stats-devices', dest='STATS_DEVICES', action='store_true', help='Dump devices information to devices.json')
-    parser.add_argument('--debug', dest='DEBUG', action='store_true', help='Show all logs')
-    parser.add_argument('--silent', dest='SILENT', action='store_true', help='Only show warnings and errors')
+    parser.add_argument('--stats-devices', dest='STATS_DEVICES', action='store_true',
+                        help='Dump devices information to devices.json')
+    parser.add_argument('--debug', '-D', dest='DEBUG', action='store_true', help='Show all logs')
+    parser.add_argument('--silent', '-S', dest='SILENT', action='store_true', help='Only show warnings and errors')
     parser.add_argument('POOL', help='Pool URL')
     parser.add_argument('WALLET', help='Your wallet address')
     args = parser.parse_args(run_args)
@@ -423,43 +490,46 @@ if __name__ == '__main__':
         log_level = 'WARNING'
     else:
         log_level = 'INFO'
-    logging.basicConfig(format='%(asctime)s [%(levelname)s] %(message)s', level=log_level)
+    log21._logging.basicConfig(format='%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S', level=log_level)
+    logger.setLevel(log_level)
 
     pool_url = args.POOL
     wallet = args.WALLET
-    logging.info('starting TON-Pool.com Miner %s on pool %s wallet %s ...' % (VERSION, pool_url, wallet))
+    logger.info(LBlue + f'Starting TON-Pool.com Miner {LPink}{VERSION}{LBlue} on pool {Cyan}{pool_url}{LBlue} '
+                        f'wallet {LCyan}{wallet}{LBlue} ...')
     start_time = time.time()
     try:
-        r = requests.get(urljoin(pool_url, '/wallet/' + wallet), headers=headers, timeout=10)
+        response = requests.get(urljoin(pool_url, '/wallet/' + wallet), headers=headers, timeout=10)
     except Exception as e:
-        logging.info('failed to connect to pool: ' + str(e))
-        os._exit(1)
-    r = r.json()
-    if 'ok' not in r:
-        logging.info('please check your wallet address: ' + r['msg'])
-        os._exit(1)
+        logger.info(LRed + 'Failed to connect to pool: ' + str(e))
+        sys.exit(1)
+    response = response.json()
+    if 'ok' not in response:
+        logger.info(LRed + 'Please check your wallet address: ' + response['msg'])
+        sys.exit(1)
     update_task(1)
-    th = Thread(target=update_task, args=(0,))
-    th.setDaemon(True)
-    th.start()
-    th = Thread(target=update_task_devfee)
-    th.setDaemon(True)
-    th.start()
-    th = Thread(target=update_task_ws)
-    th.setDaemon(True)
-    th.start()
+    thread = Thread(target=update_task, args=(0,))
+    thread.setDaemon(True)
+    thread.start()
+    thread = Thread(target=update_task_devfee)
+    thread.setDaemon(True)
+    thread.start()
+    thread = Thread(target=update_task_ws)
+    thread.setDaemon(True)
+    thread.start()
     for _ in range(8):
-        th = Thread(target=report_share)
-        th.setDaemon(True)
-        th.start()
+        thread = Thread(target=report_share)
+        thread.setDaemon(True)
+        thread.start()
 
     platforms = cl.get_platforms()
     platforms_ids = [] if not args.PLATFORM else list(map(int, args.PLATFORM.split(',')))
     for x in platforms_ids:
         if x >= len(platforms):
-            logging.error('wrong platform ID: %d' % x)
-            os._exit(1)
-    devices_ids = [] if not args.DEVICE else list(map(lambda x: tuple(map(int, x.split('-')))if'-' in x else (None, int(x)), args.DEVICE.split(',')))
+            logger.error(LRed + f'Wrong platform ID: {x}')
+            sys.exit(1)
+    devices_ids = [] if not args.DEVICE else list(map(
+        lambda x: tuple(map(int, x.split('-'))) if '-' in x else (None, int(x)), args.DEVICE.split(',')))
     devices_ids_c = devices_ids[:]
     devices = []
     for i in range(len(platforms)):
@@ -480,17 +550,17 @@ if __name__ == '__main__':
                 devices.append(device)
     if len(devices_ids_c):
         a, b = devices_ids_c[0]
-        logging.error('wrong device ID: ' + ('%d' % b if a is None else '%d-%d' % (a, b)))
-        os._exit(1)
+        logger.error(LRed + 'Wrong device ID: ' + (str(b) if a is None else f'{a}-{b}'))
+        sys.exit(1)
     if not args.PLATFORM and not args.DEVICE:
         new_devices = []
         for device in devices:
             if device.type != cl.device_type.CPU:
                 new_devices.append(device)
             else:
-                logging.info("ignore device %s since it's CPU" % device.name)
+                logger.info(Red + f"Ignore device {device.name} since it's CPU")
         devices = new_devices
-    logging.info('total devices: %d' % len(devices))
+    logger.info(LCyan + f'Total devices: {len(devices)}')
     hashes_count_per_device = [0] * len(devices)
 
     if args.STATS_DEVICES:
@@ -499,17 +569,24 @@ if __name__ == '__main__':
             stats_devices.append({'name': device.name, 'bus': get_device_id(device)[1]})
         json.dump(stats_devices, open('devices.json', 'w'))
 
-    path = os.path.dirname(os.path.abspath(__file__))
     try:
-        prog = open(os.path.join(path, 'sha256.cl'), 'r').read() + '\n' + open(os.path.join(path, 'hash_solver.cl'), 'r').read()
+        import opencl_program
+
+        path = opencl_program.__path__._path[0]
+        program = open(os.path.join(path, 'sha256.cl'), 'r').read() + '\n' + \
+                  open(os.path.join(path, 'hash_solver.cl'), 'r').read()
     except:
-        logging.info('failed to load opencl program')
-        os._exit(1)
+        try:
+            program = open('./sha256.cl', 'r').read() + '\n' + \
+                      open('./hash_solver.cl', 'r').read()
+        except:
+            logger.info(LRed + 'Failed to load opencl program')
+            sys.exit(1)
     for i, device in enumerate(devices):
-        w = Worker(device, prog, args.THREADS, i)
-        th = Thread(target=w.run)
-        th.setDaemon(True)
-        th.start()
+        worker = Worker(device, program, args.THREADS, i)
+        thread = Thread(target=worker.run)
+        thread.setDaemon(True)
+        thread.start()
 
     ss = []
     ss.append((time.time(), hashes_count, [0] * len(devices)))
@@ -518,22 +595,24 @@ if __name__ == '__main__':
         try:
             time.sleep(10)
         except KeyboardInterrupt:
-            logging.info('exiting...')
-            os._exit(0)
+            logger.info(Red + 'Exiting...')
+            sys.exit(0)
         ss.append((time.time(), hashes_count, hashes_count_per_device[:]))
         if len(ss) > 7:
             ss.pop(0)
         a, b = ss[-2], ss[-1]
         ct = b[0] - a[0]
-        log_text = 'total hashrate: %.2fMH/s in %.2fs, %d shares found' % (((b[1] - a[1]) / ct / 10**6), ct, shares_count)
+        log_text = Green + f'Total hashrate{LRed}: {LBlue}{((b[1] - a[1]) / ct / 10 ** 6):.2f}MH/s{Green} in ' \
+                           f'{ct:.2f}s, {LBlue}{shares_count}{Green} shares found'
         if pool_has_results:
-            log_text += ', %d accepted' % shares_accepted
-        logging.info(log_text)
+            log_text += f', {LCyan}{shares_accepted}{Green} accepted'
+        logger.info(log_text)
         cnt += 1
         if cnt >= 6 and cnt % 6 == 2:
             a, b = ss[0], ss[-1]
             ct = b[0] - a[0]
-            logging.info('average hashrate in last minute: %.2fMH/s in %.2fs' % (((b[1] - a[1]) / ct / 10**6), ct))
+            logger.info(LGreen + f'Average hashrate in last minute{LRed}: '
+                                 f'{LBlue}{((b[1] - a[1]) / ct / 10 ** 6):.2f}MH/s{LGreen} in {ct:.2f}s')
         if (cnt < 8 or cnt % 6 == 2) and args.STATS:
             if cnt < 8:
                 a, b = ss[-2], ss[-1]
@@ -542,11 +621,15 @@ if __name__ == '__main__':
             ct = b[0] - a[0]
             rates = []
             for i in range(len(devices)):
-                rates.append((b[2][i] - a[2][i]) / ct / 10**6)
+                rates.append((b[2][i] - a[2][i]) / ct / 10 ** 6)
             json.dump({
-                'total': (b[1] - a[1]) / ct / 10**3,
+                'total': (b[1] - a[1]) / ct / 10 ** 3,
                 'rates': rates,
                 'uptime': time.time() - start_time,
                 'accepted': shares_accepted,
                 'rejected': shares_count - shares_accepted,
             }, open('stats.json', 'w'))
+
+
+if __name__ == '__main__':
+    main()
