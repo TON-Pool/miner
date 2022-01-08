@@ -3,4 +3,4 @@ numpy==1.22.0
 pyinstaller==4.7
 pyopencl
 requests==2.27.1
-websocket==0.2.1
+websocket-client

@@ -23,7 +23,7 @@ from urllib.parse import urljoin
 
 class Task:
     def __init__(self, global_it: int, input_, giver, complexity, hash_state, suffix_arr, load_time: float, submit_conf,
-                 wallet_b64):
+                 is_devfee: bool):
         self.global_it: int = global_it
         self.input = input_
         self.giver = giver
@@ -32,7 +32,7 @@ class Task:
         self.suffix_arr = suffix_arr
         self.load_time = load_time
         self.submit_conf = submit_conf
-        self.is_devfee: bool = wallet_b64 == DEFAULT_WALLET
+        self.is_devfee: bool = is_devfee
 
     def list(self) -> list:
         return [self.global_it, self.input, self.giver, self.complexity, self.hash_state, self.suffix_arr,
@@ -72,6 +72,7 @@ DEVFEE_POOL_URLS = ['https://next.ton-pool.club', 'https://next.ton-pool.com']
 
 headers = {'user-agent': 'ton-pool-miner/' + VERSION}
 
+devfee = 1
 hashes_count = 0
 hashes_count_devfee = 0
 hashes_count_per_device = []
@@ -80,6 +81,7 @@ cur_task: Task = None
 task_lock = RLock()
 share_report_queue = Queue()
 shares_count = 0
+shares_count_devfee = 0
 shares_accepted = 0
 shares_lock = RLock()
 
@@ -100,12 +102,12 @@ def count_hashes(num, device_id, is_devfee):
 
 
 def report_share():
-    global shares_count, shares_accepted, pool_has_results
+    global shares_count, shares_accepted, pool_has_results, shares_count_devfee
     n_tries = 5
     session = requests.Session()
     while True:
-        input_, giver, hash_, tm, (pool_url_, wallet_) = share_report_queue.get(True)
-        is_devfee = wallet_ == DEFAULT_WALLET
+        input_, giver, hash_, tm, (pool_url_, wallet_), is_devfee = share_report_queue.get(True)
+
         logger.debug(LYellow + f'Trying to submit share {LCyan}{hash_.hex()}{LRed}{"(devfee) " if is_devfee else ""}\n'
                                f'{LYellow} [input = {input_}, giver = {giver}, job_time = {tm:.2f}]')
         for i in range(n_tries + 1):
@@ -114,7 +116,9 @@ def report_share():
                                         json={'inputs': [input_], 'giver': giver, 'miner_addr': wallet_},
                                         headers=headers,
                                         timeout=4 * (i + 1))
-                d = response.json()
+                json_response = response.json()
+                # Response example:
+                # e.g.1: {'accepted': 1}
             except Exception as exception:
                 if i == n_tries:
                     if not is_devfee:
@@ -126,12 +130,13 @@ def report_share():
                 time.sleep(0.5)
                 continue
             if is_devfee:
-                pass
-            elif 'accepted' not in d:
+                shares_count_devfee += 1
+
+            elif 'accepted' not in json_response:
                 logger.info(LGreen + f'Found share {LCyan}{hash_.hex()}')
                 with shares_lock:
                     shares_accepted += 1
-            elif response.status_code == 200 and 'accepted' in d and d['accepted']:
+            elif response.status_code == 200 and 'accepted' in json_response and json_response['accepted']:
                 pool_has_results = True
                 logger.info(LGreen + f'Successfully submitted share {LCyan}{hash_.hex()}')
                 with shares_lock:
@@ -141,9 +146,8 @@ def report_share():
                 logger.warning(LRed + f'Share {LCyan}{hash_.hex()}{LRed} rejected '
                                       f'(job was got {int(time.time() - tm)}s ago)')
             break
-        if not is_devfee:
-            with shares_lock:
-                shares_count += 1
+        with shares_lock:
+            shares_count += 1
 
 
 def load_task(response, src, submit_conf):
@@ -163,7 +167,7 @@ def load_task(response, src, submit_conf):
     for j in range(0, 60, 4):
         suffix_arr.append(int.from_bytes(suffix[j:j + 4], 'big'))
     new_task = Task(0, input_, response['giver'], complexity, hash_state, suffix_arr, time.time(), submit_conf,
-                    wallet_b64)
+                    src == 'devfee')
     with task_lock:
         cur_task = new_task
     logger.debug(Green + f'Successfully loaded new task from {src}: {LGreen}{new_task}')
@@ -171,36 +175,45 @@ def load_task(response, src, submit_conf):
 
 def is_ton_pool_com(pool_url_):
     pool_url_ = pool_url_.strip('/')
-    if pool_url_.endswith('.ton-pool.com'):
-        return True
-    if pool_url_.endswith('.ton-pool.club'):
+    if pool_url_.endswith('.ton-pool.com') or pool_url_.endswith('.ton-pool.club'):
         return True
     return False
-
-
-def update_task_devfee():
-    session = requests.Session()
-    while True:
-        if not is_ton_pool_com(pool_url) and hashes_count_devfee + 4 * 10 ** 10 < hashes_count // 100:
-            try:
-                url = random.choice(DEVFEE_POOL_URLS)
-                response = session.get(urljoin(url, '/job'), headers=headers, timeout=10).json()
-                load_task(response, 'devfee', (url, DEFAULT_WALLET))
-            except Exception:
-                pass
-        time.sleep(5 + random.random() * 5)
 
 
 def update_task(limit: int) -> None:
     session = requests.Session()
     while True:
-        try:
-            response = session.get(urljoin(pool_url, '/job'), headers=headers, timeout=10).json()
-            load_task(response, '/job', (pool_url, wallet))
-        except Exception as exception:
-            logger.warning(LRed + f'failed to fetch new job: {exception}')
-            time.sleep(5)
-            continue
+        if shares_count_devfee + 1 < shares_count / 100 * devfee:
+            try:
+                if devfee == 1 and not is_ton_pool_com(pool_url):
+                    url = random.choice(DEVFEE_POOL_URLS)
+                    response = session.get(urljoin(url, '/job'), headers=headers, timeout=10).json()
+                    load_task(response, 'devfee', (url, DEFAULT_WALLET))
+                elif devfee > 1:
+                    url = random.choice(DEVFEE_POOL_URLS)
+                    wallet_ = random.choice([DEFAULT_WALLET, 'EQDvXodurMMNYMuuJLN9ygTSgbQUdo96kX0Fz4QbnmAtzFhf'])
+                    response = session.get(urljoin(url, '/job'), headers=headers, timeout=10).json()
+                    load_task(response, 'devfee', (url, wallet_))
+            except Exception:
+                continue
+        else:
+            try:
+                response = session.get(urljoin(pool_url, '/job'), headers=headers, timeout=10).json()
+                # Response example:
+                # {
+                # 'seqno': 1641556452145,
+                # 'wallet': 'EQA4FvvNgz9GThubbM4F4CQBZR26uP6UH13CoEODBAOXJAs0',
+                # 'seed': '83519e9f62d109fb8da3f469e56db164',
+                # 'complexity': '000000000fffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+                # 'giver': 'Ef-FV4QTxLl-7Ct3E6MqOtMt-RGXMxi27g4I645lw6MTWg0f',
+                # 'expire': 1641557354,
+                # 'prefix': '00016277f5b903657643de95cbfd2848'
+                # }
+                load_task(response, '/job', (pool_url, wallet))
+            except Exception as exception:
+                logger.warning(LRed + f'failed to fetch new job: {exception}')
+                time.sleep(5)
+                continue
         limit -= 1
         if limit == 0:
             return
@@ -262,9 +275,9 @@ except:
 benchmark_lock = RLock()
 
 
-def report_benchmark(id, data):
+def report_benchmark(id_, data):
     with benchmark_lock:
-        benchmark_data[id] = data
+        benchmark_data[id_] = data
         json.dump(benchmark_data, open('benchmark_data.txt', 'w'))
 
 
@@ -289,9 +302,9 @@ def get_device_id(device):
 
 
 class Worker:
-    def __init__(self, device, program, threads, id):
+    def __init__(self, device: cl._cl.Device, program, threads, device_id):
         self.device = device
-        self.device_id = id
+        self.device_id = device_id
         self.context = cl.Context(devices=[device], dev_type=None)
         self.queue = cl.CommandQueue(self.context)
         self.program = cl.Program(self.context, program).build()
@@ -303,10 +316,11 @@ class Worker:
         self.threads = threads
 
     def run_task(self, kernel, iterations):
-        mf = cl.mem_flags
+        mem_flags = cl.mem_flags
         input_, giver, complexity, suffix_arr, global_it, tm, submit_conf, is_devfee, args = get_task(iterations)
-        args_g = cl.Buffer(self.context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=args)
-        res_g = cl.Buffer(self.context, mf.WRITE_ONLY | mf.COPY_HOST_PTR, hostbuf=np.full(2048, 0xffffffff, np.uint32))
+        args_g = cl.Buffer(self.context, mem_flags.READ_ONLY | mem_flags.COPY_HOST_PTR, hostbuf=args)
+        res_g = cl.Buffer(self.context, mem_flags.WRITE_ONLY | mem_flags.COPY_HOST_PTR,
+                          hostbuf=np.full(2048, 0xffffffff, np.uint32))
         kernel(self.queue, (self.threads,), None, args_g, res_g)
         res = np.empty(2048, np.uint32)
         e = cl.enqueue_copy(self.queue, res, res_g, is_blocking=False)
@@ -331,11 +345,11 @@ class Worker:
                 input_new = input_[:64]
                 for x in suf:
                     input_new += int(x).to_bytes(4, 'big')
-                h = hashlib.sha256(input_new[:123]).digest()
-                if h[:4] != b'\0\0\0\0':
+                hash_ = hashlib.sha256(input_new[:123]).digest()
+                if hash_[:4] != b'\0\0\0\0':
                     logger.warning(LRed + 'Hash integrity error, please check your graphics card drivers')
-                if h < complexity:
-                    share_report_queue.put((input_new[:123].hex(), giver, h, tm, submit_conf))
+                if hash_ < complexity:
+                    share_report_queue.put((input_new[:123].hex(), giver, hash_, tm, submit_conf, is_devfee))
         count_hashes(self.threads * iterations, self.device_id, is_devfee)
 
     def warmup(self, kernel, time_limit):
@@ -351,7 +365,7 @@ class Worker:
                 break
         return iterations, elapsed
 
-    def benchmark_kernel(self, dd, kernel, report_status):
+    def benchmark_kernel(self, device_name, kernel, report_status):
         iterations = 2048
         max_hr = (0, 0)
         flag = False
@@ -378,7 +392,7 @@ class Worker:
                                    f'{LGreen}{(hr / 1e6):.2f}MH/s {LRed}({Cyan}{hs} hashes in {tm}s{LRed})')
             if hr > max_hr[0]:
                 max_hr = (hr, iterations)
-        report_benchmark(dd + ':' + kernel.function_name, list(max_hr))
+        report_benchmark(device_name + ':' + kernel.function_name, list(max_hr))
 
     def find_kernel(self, kernel_name):
         for kernel in self.kernels:
@@ -390,18 +404,18 @@ class Worker:
         def show_benchmark_status(x):
             nonlocal old_benchmark_status
             x = x * 100
-            if x > old_benchmark_status + 2 and x <= 98:
+            if old_benchmark_status + 2 < x <= 98:
                 old_benchmark_status = x
-                logger.info(Green + f'Benchmarking {dd} ... {int(x)}%')
+                logger.info(Green + f'Benchmarking {device_name} ... {int(x)}%')
 
-        def report_benchmark_status(it):
+        def report_benchmark_status(iterations):
             nonlocal cur
-            if it in ut:
-                cur += ut[it]
+            if iterations in ut:
+                cur += ut[iterations]
                 show_benchmark_status(cur / tot)
 
-        dd, _ = get_device_id(self.device)
-        logger.info(Green + f'Starting benchmark for {dd} ...')
+        device_name, _ = get_device_id(self.device)
+        logger.info(Green + f'Starting benchmark for {device_name} ...')
         logger.info(LYellow + 'The hashrate may be not stable in several minutes due to benchmarking')
         old_benchmark_status = 0
         it, el = self.warmup(self.find_kernel('hash_solver_3'), 15)
@@ -416,31 +430,39 @@ class Worker:
         tot = (15 + sum(ut.values()) * 4) / 0.95
         cur = 15
         for kernel in kernels:
-            self.benchmark_kernel(dd, kernel, report_benchmark_status)
+            self.benchmark_kernel(device_name, kernel, report_benchmark_status)
 
     def run(self):
-        dd, _ = get_device_id(self.device)
+        if not self.kernels:
+            logger.warning(Green + get_device_id(self.device)[0] + LRed + ': No kernels found!')
+            return
+        device_name, _ = get_device_id(self.device)
         pending_benchmark = []
         for kernel in self.kernels:
-            if dd + ':' + kernel.function_name not in benchmark_data:
+            if device_name + ':' + kernel.function_name not in benchmark_data:
                 pending_benchmark.append(kernel)
         if len(pending_benchmark):
             self.run_benchmark(pending_benchmark)
         max_hr = 0
         for kernel in self.kernels:
-            hr, it = benchmark_data[dd + ':' + kernel.function_name]
+            hr, it = benchmark_data[device_name + ':' + kernel.function_name]
             if hr > max_hr:
                 max_hr = hr
                 self.best_kernel = kernel
                 self.iterations = it
-        logger.info(Green + f'{dd}: starting normal mining with {self.best_kernel.function_name} and {self.iterations} '
-                            f'iterations per thread')
+        if not hasattr(self, 'best_kernel'):
+            logger.warning(Green + get_device_id(self.device)[0] + LRed + ': Best kernel not found!')
+            self.best_kernel = self.kernels[0]
+        if not hasattr(self, 'iterations'):
+            self.iterations = 512
+        logger.info(Green + f'{device_name}: starting normal mining with {self.best_kernel.function_name} and '
+                            f'{self.iterations} iterations per thread')
         while True:
             self.run_task(self.best_kernel, self.iterations)
 
 
 def main():
-    global pool_url, wallet, hashes_count_per_device
+    global pool_url, wallet, hashes_count_per_device, devfee
     if len(sys.argv) == 1:
         sys.argv.append('')
     if sys.argv[1] == 'info':
@@ -478,6 +500,10 @@ def main():
     parser.add_argument('--stats', dest='STATS', action='store_true', help='Dump stats to stats.json')
     parser.add_argument('--stats-devices', dest='STATS_DEVICES', action='store_true',
                         help='Dump devices information to devices.json')
+    parser.add_argument('--devfee', dest='DEVFEE', action='store', type=float, default=1,
+                        help='How much fee to pay to developers in percents.(Default: 1%%)')
+    parser.add_argument('--use-cpu', '-cpu', dest='USE_CPU', action='store_true',
+                        help='Use this option if you want to use your cpu to mine.')
     parser.add_argument('--debug', '-D', dest='DEBUG', action='store_true', help='Show all logs')
     parser.add_argument('--silent', '-S', dest='SILENT', action='store_true', help='Only show warnings and errors')
     parser.add_argument('POOL', help='Pool URL')
@@ -493,6 +519,9 @@ def main():
     log21._logging.basicConfig(format='%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S', level=log_level)
     logger.setLevel(log_level)
 
+    devfee = (args.DEVFEE if args.DEVFEE <= 50 else 50) if args.DEVFEE > 1 else 1
+    if args.DEVFEE != 1:
+        logger.info(Green + f'Developer fee\'s set to {LPink}{devfee}%')
     pool_url = args.POOL
     wallet = args.WALLET
     logger.info(LBlue + f'Starting TON-Pool.com Miner {LPink}{VERSION}{LBlue} on pool {Cyan}{pool_url}{LBlue} '
@@ -501,32 +530,35 @@ def main():
     try:
         response = requests.get(urljoin(pool_url, '/wallet/' + wallet), headers=headers, timeout=10)
     except Exception as e:
-        logger.info(LRed + 'Failed to connect to pool: ' + str(e))
+        logger.info(LRed + 'Failed to connect to pool:', e)
         sys.exit(1)
     response = response.json()
+    # Response value example:
+    # e.g.1: {'ok': True, 'registered': True}
+    # e.g.2: {'msg': 'invalid wallet'}
     if 'ok' not in response:
         logger.info(LRed + 'Please check your wallet address: ' + response['msg'])
         sys.exit(1)
     update_task(1)
     thread = Thread(target=update_task, args=(0,))
-    thread.setDaemon(True)
+    thread.daemon = True
     thread.start()
-    thread = Thread(target=update_task_devfee)
-    thread.setDaemon(True)
-    thread.start()
+    # thread = Thread(target=update_task_devfee)
+    # thread.daemon = True
+    # thread.start()
     thread = Thread(target=update_task_ws)
-    thread.setDaemon(True)
+    thread.daemon = True
     thread.start()
     for _ in range(8):
         thread = Thread(target=report_share)
-        thread.setDaemon(True)
+        thread.daemon = True
         thread.start()
 
     platforms = cl.get_platforms()
     platforms_ids = [] if not args.PLATFORM else list(map(int, args.PLATFORM.split(',')))
-    for x in platforms_ids:
-        if x >= len(platforms):
-            logger.error(LRed + f'Wrong platform ID: {x}')
+    for platform_id in platforms_ids:
+        if platform_id >= len(platforms):
+            logger.error(LRed + f'Wrong platform ID: {platform_id}')
             sys.exit(1)
     devices_ids = [] if not args.DEVICE else list(map(
         lambda x: tuple(map(int, x.split('-'))) if '-' in x else (None, int(x)), args.DEVICE.split(',')))
@@ -552,14 +584,17 @@ def main():
         a, b = devices_ids_c[0]
         logger.error(LRed + 'Wrong device ID: ' + (str(b) if a is None else f'{a}-{b}'))
         sys.exit(1)
-    if not args.PLATFORM and not args.DEVICE:
-        new_devices = []
-        for device in devices:
-            if device.type != cl.device_type.CPU:
-                new_devices.append(device)
-            else:
-                logger.info(Red + f"Ignore device {device.name} since it's CPU")
-        devices = new_devices
+
+    if not args.USE_CPU:
+        # Ignores CPUs
+        if not args.PLATFORM and not args.DEVICE:
+            new_devices = []
+            for device in devices:
+                if device.type != cl.device_type.CPU:
+                    new_devices.append(device)
+                else:
+                    logger.info(Red + f"Ignore device {device.name} since it's CPU")
+            devices = new_devices
     logger.info(LCyan + f'Total devices: {len(devices)}')
     hashes_count_per_device = [0] * len(devices)
 
@@ -569,6 +604,7 @@ def main():
             stats_devices.append({'name': device.name, 'bus': get_device_id(device)[1]})
         json.dump(stats_devices, open('devices.json', 'w'))
 
+    # Tries to load the opencl program
     try:
         import opencl_program
 
@@ -582,14 +618,15 @@ def main():
         except:
             logger.info(LRed + 'Failed to load opencl program')
             sys.exit(1)
+
+    # Runs the workers
     for i, device in enumerate(devices):
         worker = Worker(device, program, args.THREADS, i)
         thread = Thread(target=worker.run)
-        thread.setDaemon(True)
+        thread.daemon = True
         thread.start()
 
-    ss = []
-    ss.append((time.time(), hashes_count, [0] * len(devices)))
+    ss = [(time.time(), hashes_count, [0] * len(devices))]
     cnt = 0
     while True:
         try:
@@ -606,6 +643,11 @@ def main():
                            f'{ct:.2f}s, {LBlue}{shares_count}{Green} shares found'
         if pool_has_results:
             log_text += f', {LCyan}{shares_accepted}{Green} accepted'
+        rejected = shares_count - shares_accepted - shares_count_devfee
+        if rejected:
+            log_text += f', {LRed}{rejected} rejected{Green}'
+        if shares_count_devfee and shares_count:
+            log_text += f', {LRed}{(shares_count_devfee / shares_count * 100):.2f}%{Green} devfee'
         logger.info(log_text)
         cnt += 1
         if cnt >= 6 and cnt % 6 == 2:
@@ -642,5 +684,4 @@ def main():
 
 
 if __name__ == '__main__':
-    start_time = time.time()
     main()

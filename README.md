@@ -26,7 +26,7 @@ Pool URL: https://next.ton-pool.club
 
 Note: The hashing algorithm will show up as darkcoin in the panel, although it is not actually.
 
-### Rave OS Configutation
+### Rave OS Configuration
 
 Go to [releases](https://github.com/TON-Pool/miner/releases), download a RaveOS package, and upload it to custom miners.
 
@@ -54,11 +54,11 @@ Try to add argument `-p 0`.
 
 If you want to debug the miner, you can run the Python code directly.
 
-You need to have Python 3 and packages `pyopencl`, `numpy`, and `requests` installed.
+You need to have Python 3 and packages `pyopencl`, `numpy`, `requests` and `log21` installed.
 
-For Linux users, you can run `pip3 install pyopencl numpy requests` to install the packages. If you are running old version of Python, try `pip3 install "pyopencl<2018.3"` and `pip3 install "numpy<1.15"`.
+For Linux users, you can run `pip3 install pyopencl numpy requests log21` to install the packages. If you are running old version of Python, try `pip3 install "pyopencl<2018.3"` and `pip3 install "numpy<1.15"`.
 
-For Windows users, you can run `pip3 install numpy requests` to install the later two packages. You need to go to https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyopencl and download an `pyopencl` binary.
+For Windows users, you can run `pip3 install numpy requests log21` to install the later two packages. You need to go to https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyopencl and download an `pyopencl` binary.
 
 The command is
 
