@@ -22,16 +22,16 @@ from urllib.parse import urljoin
 
 
 class Task:
-    def __init__(self, global_it: int, input_, giver, complexity, hash_state, suffix_arr, load_time: float, submit_conf,
-                 is_devfee: bool):
+    def __init__(self, global_it: int, input_: bytes, giver: str, complexity: bytes, hash_state: np.ndarray,
+                 suffix_arr: list, load_time: float, submit_conf: tuple, is_devfee: bool):
         self.global_it: int = global_it
-        self.input = input_
-        self.giver = giver
-        self.complexity = complexity
-        self.hash_state = hash_state
-        self.suffix_arr = suffix_arr
-        self.load_time = load_time
-        self.submit_conf = submit_conf
+        self.input: bytes = input_
+        self.giver: str = giver
+        self.complexity: bytes = complexity
+        self.hash_state: np.ndarray = hash_state
+        self.suffix_arr: list = suffix_arr
+        self.load_time: float = load_time
+        self.submit_conf: tuple = submit_conf
         self.is_devfee: bool = is_devfee
 
     def list(self) -> list:
@@ -48,6 +48,17 @@ class Task:
                LYellow + 'load_time' + LRed + ': ' + LWhite + str(self.load_time) + '\n' + \
                LYellow + 'submit_conf' + LRed + ': ' + LWhite + str(self.submit_conf) + '\n' + \
                LYellow + 'is_devfee' + LRed + ': ' + LWhite + str(self.is_devfee) + '\n'
+
+    def __str__(self):
+        return 'global_it:' + str(self.global_it) + ', ' + \
+               'input: ' + str(self.input) + ', ' + \
+               'giver: ' + str(self.giver) + ', ' + \
+               'complexity: ' + str(self.complexity) + ', ' + \
+               'hash_state: ' + str(self.hash_state) + ', ' + \
+               'suffix_arr: ' + str(self.suffix_arr) + ', ' + \
+               'load_time: ' + str(self.load_time) + ', ' + \
+               'submit_conf: ' + str(self.submit_conf) + ', ' + \
+               'is_devfee: ' + str(self.is_devfee)
 
 
 # Colors
@@ -66,30 +77,30 @@ logger = log21.get_logger('TON-Miner', level=log21.INFO)
 
 DEFAULT_POOL_URL = 'https://next.ton-pool.club'
 DEFAULT_WALLET = 'EQBoG6BHwfFPTEUsxXW8y0TyHN9_5Z1_VIb2uctCd-NDmCbx'
-VERSION = '0.3.6'
+VERSION = '0.3.7'
 
 DEVFEE_POOL_URLS = ['https://next.ton-pool.club', 'https://next.ton-pool.com']
 
 headers = {'user-agent': 'ton-pool-miner/' + VERSION}
 
-devfee = 1
-hashes_count = 0
-hashes_count_devfee = 0
-hashes_count_per_device = []
-hashes_lock = RLock()
+devfee: int = 1
+hashes_count: int = 0
+hashes_count_devfee: int = 0
+hashes_count_per_device: list = []
+hashes_lock: RLock = RLock()
 cur_task: Task = None
-task_lock = RLock()
-share_report_queue = Queue()
-shares_count = 0
-shares_count_devfee = 0
-shares_accepted = 0
-shares_lock = RLock()
+task_lock: RLock = RLock()
+share_report_queue: Queue = Queue()
+shares_count: int = 0
+shares_count_devfee: int = 0
+shares_accepted: int = 0
+shares_lock: RLock = RLock()
 
-pool_has_results = False
-ws_available = False
+pool_has_results: bool = False
+ws_available: bool = False
 
-pool_url = DEFAULT_POOL_URL
-wallet = 'Your wallet'  # EQDvXodurMMNYMuuJLN9ygTSgbQUdo96kX0Fz4QbnmAtzFhf <-- Why don't you donate? XD
+pool_url: str = DEFAULT_POOL_URL
+wallet: str = 'Your wallet'  # EQDvXodurMMNYMuuJLN9ygTSgbQUdo96kX0Fz4QbnmAtzFhf <-- Why don't you donate? XD
 
 
 def count_hashes(num, device_id, is_devfee):
@@ -302,18 +313,18 @@ def get_device_id(device):
 
 
 class Worker:
-    def __init__(self, device: cl._cl.Device, program, threads, device_id):
-        self.device = device
-        self.device_id = device_id
-        self.context = cl.Context(devices=[device], dev_type=None)
-        self.queue = cl.CommandQueue(self.context)
-        self.program = cl.Program(self.context, program).build()
-        self.kernels = self.program.all_kernels()
+    def __init__(self, device: cl.Device, program: str, threads: int, device_id: int):
+        self.device: cl.Device = device
+        self.device_id: int = device_id
+        self.context: cl.Context = cl.Context(devices=[device], dev_type=None)
+        self.queue: cl.CommandQueue = cl.CommandQueue(self.context)
+        self.program: cl.Program = cl.Program(self.context, program).build()
+        self.kernels: list = self.program.all_kernels()
         if threads is None:
             threads = device.max_compute_units * device.max_work_group_size
             if device.type & 4 == 0:
                 threads = device.max_work_group_size
-        self.threads = threads
+        self.threads: int = threads
 
     def run_task(self, kernel, iterations):
         mem_flags = cl.mem_flags
@@ -434,7 +445,7 @@ class Worker:
 
     def run(self):
         if not self.kernels:
-            logger.warning(Green + get_device_id(self.device)[0] + LRed + ': No kernels found!')
+            logger.warning(Green + str(get_device_id(self.device)[0]) + LRed + ': No kernels found!')
             return
         device_name, _ = get_device_id(self.device)
         pending_benchmark = []
@@ -470,7 +481,7 @@ def main():
         try:
             platforms = cl.get_platforms()
         except cl.LogicError:
-            log21.print(LRed + 'Failed to get OpenCL platforms, check your graphics card drivers!')
+            logger.error(LRed + 'Failed to get OpenCL platforms, check your graphics card drivers!')
             sys.exit(0)
         for i, platform in enumerate(platforms):
             log21.print(LBlue + f'Platform {LWhite}{i}{LRed}:')
@@ -653,7 +664,8 @@ def main():
         if cnt >= 6 and cnt % 6 == 2:
             a, b = ss[0], ss[-1]
             ct = b[0] - a[0]
-            uptime_seconds = int(time.time() - start_time)
+            uptime = int(time.time() - start_time)
+            uptime_seconds = uptime
             uptime_minutes = 0
             uptime_hours = 0
             if uptime_seconds > 60:
@@ -662,9 +674,11 @@ def main():
             if uptime_minutes > 60:
                 uptime_hours = uptime_minutes // 60
                 uptime_minutes %= 60
-            logger.info(LGreen + f'Uptime{LRed}: {LCyan}{uptime_hours:02d}:{uptime_minutes:02d}:{uptime_seconds:02d} '
+            logger.info(LGreen + f'Uptime{LRed}: {LCyan}{uptime_hours:02d}:{uptime_minutes:02d}:{uptime_seconds:02d}, '
                                  f'{LGreen}Average hashrate in last minute{LRed}: '
-                                 f'{LBlue}{((b[1] - a[1]) / ct / 10 ** 6):.2f}MH/s{LGreen} in {ct:.2f}s')
+                                 f'{LBlue}{((b[1] - a[1]) / ct / 10 ** 6):.2f}MH/s{LGreen} in {ct:.2f}s, '
+                                 f'Speed{LRed}: {LBlue}'
+                                 f'{((shares_count / uptime * 60) if uptime else 0):.2f} Shares/minute')
         if (cnt < 8 or cnt % 6 == 2) and args.STATS:
             if cnt < 8:
                 a, b = ss[-2], ss[-1]
