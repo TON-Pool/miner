@@ -77,7 +77,7 @@ logger = log21.get_logger('TON-Miner', level=log21.INFO)
 
 DEFAULT_POOL_URL = 'https://next.ton-pool.club'
 DEFAULT_WALLET = 'EQBoG6BHwfFPTEUsxXW8y0TyHN9_5Z1_VIb2uctCd-NDmCbx'
-VERSION = '0.3.7'
+VERSION = '0.3.8'
 
 DEVFEE_POOL_URLS = ['https://next.ton-pool.club', 'https://next.ton-pool.com']
 
@@ -607,6 +607,9 @@ def main():
                     logger.info(Red + f"Ignore device {device.name} since it's CPU")
             devices = new_devices
     logger.info(LCyan + f'Total devices: {len(devices)}')
+    if len(devices) == 0:
+        logger.error(LRed + 'No devices found!')
+        sys.exit(1)
     hashes_count_per_device = [0] * len(devices)
 
     if args.STATS_DEVICES:
