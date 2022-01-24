@@ -22,7 +22,7 @@ jobs:
           pip install setuptools wheel log21>=1.5.2 numpy==1.22.0 pyinstaller==4.7 pyopencl requests==2.27.1 websocket==0.2.1
       - name: Build
         run: |
-          pyinstaller miner.py -F -c --collect-all pyopencl --collect-all certifi --collect-all websocket --add-data sha256.cl;opencl_program --add-data hash_solver.cl;opencl_program --hidden-import websocket
+          pyinstaller miner.py -F -c --collect-all pyopencl --collect-all certifi --add-data sha256.cl:opencl_program --add-data hash_solver.cl:opencl_program --hidden-import websocket-client -i icon.ico
       - uses: "marvinpinto/action-automatic-releases@latest"
         with:
           repo_token: "${{ secrets.GITHUB_TOKEN }}"
@@ -46,7 +46,7 @@ jobs:
           pip install setuptools wheel log21>=1.5.2 numpy==1.22.0 pyinstaller==4.7 pyopencl requests==2.27.1 websocket==0.2.1
       - name: Build
         run: |
-          pyinstaller miner.py -F -c --collect-all pyopencl --collect-all certifi --collect-all websocket --add-data sha256.cl;opencl_program --add-data hash_solver.cl;opencl_program --hidden-import websocket -i icon.ico
+          pyinstaller miner.py -F -c --collect-all pyopencl --collect-all certifi --add-data sha256.cl;opencl_program --add-data hash_solver.cl;opencl_program --hidden-import websocket-client -i icon.ico
       - uses: "marvinpinto/action-automatic-releases@latest"
         with:
           repo_token: "${{ secrets.GITHUB_TOKEN }}"
