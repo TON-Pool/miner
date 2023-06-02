@@ -2,5 +2,5 @@ log21>=1.5.2
 numpy==1.22.0
 pyinstaller==4.7
 pyopencl
-requests==2.27.1
+requests==2.31.0
 websocket-client
