@@ -1,6 +1,7 @@
 log21>=1.5.2
-numpy==1.22.0
+numpy==1.22.2
 pyinstaller==4.7
 pyopencl
 requests==2.31.0
 websocket-client
+setuptools>=65.5.1 # not directly required, pinned by Snyk to avoid a vulnerability
